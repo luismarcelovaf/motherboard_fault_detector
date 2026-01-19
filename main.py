@@ -459,7 +459,12 @@ def download_models():
     print("-" * 40)
 
     try:
-        from src.utils.huggingface import download_model, get_repo_id, check_remote_models
+        from src.utils.huggingface import download_model, get_repo_id, check_remote_models, ensure_login
+
+        # Prompt for token first if not logged in
+        if not ensure_login():
+            print("\n[!] Cannot download without Hugging Face authentication.")
+            return
 
         repo_id = get_repo_id()
         print(f"\nRepository: {repo_id}")
