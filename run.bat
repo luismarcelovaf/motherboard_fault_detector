@@ -1,6 +1,17 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Catch any crashes
+if "%1"=="__INNER__" goto :main
+cmd /c "%~f0" __INNER__ %*
+if errorlevel 1 (
+    echo.
+    echo [!] Script ended unexpectedly. Press any key to close.
+    pause >nul
+)
+exit /b %errorlevel%
+
+:main
 title Motherboard Fault Detection AI
 
 echo ============================================================
@@ -76,20 +87,34 @@ echo Upgrading pip...
 echo.
 echo Detecting GPU...
 set HAS_GPU=0
-where nvidia-smi >nul 2>&1 && nvidia-smi >nul 2>&1 && set HAS_GPU=1
+
+:: Check if nvidia-smi exists and works
+where nvidia-smi >nul 2>&1
+if !errorlevel! equ 0 (
+    nvidia-smi >nul 2>&1
+    if !errorlevel! equ 0 (
+        set HAS_GPU=1
+    )
+)
 
 if "!HAS_GPU!"=="1" (
     echo [OK] NVIDIA GPU detected - installing PyTorch with CUDA support
-    echo This may take several minutes (downloading ~2.5GB)...
+    echo This may take several minutes - downloading ~2.5GB...
     "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-    if errorlevel 1 (
+    if !errorlevel! neq 0 (
         echo [WARN] CUDA version failed, trying CPU version...
         "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
     )
 ) else (
     echo [INFO] No NVIDIA GPU detected - installing PyTorch CPU version
-    echo This may take a few minutes (downloading ~200MB)...
+    echo This may take a few minutes - downloading ~200MB...
     "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+)
+
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to install PyTorch!
+    pause
+    exit /b 1
 )
 
 :: Install other requirements
