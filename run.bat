@@ -75,8 +75,10 @@ echo Upgrading pip...
 :: Detect NVIDIA GPU
 echo.
 echo Detecting GPU...
-nvidia-smi >nul 2>&1
-if %errorlevel% equ 0 (
+set HAS_GPU=0
+where nvidia-smi >nul 2>&1 && nvidia-smi >nul 2>&1 && set HAS_GPU=1
+
+if "!HAS_GPU!"=="1" (
     echo [OK] NVIDIA GPU detected - installing PyTorch with CUDA support
     echo This may take several minutes (downloading ~2.5GB)...
     "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
