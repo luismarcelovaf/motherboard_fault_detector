@@ -60,15 +60,25 @@ if errorlevel 1 (
 )
 echo [OK] Virtual environment created.
 
-:: Install PyTorch with CUDA
-echo.
-echo Installing PyTorch with CUDA support...
-echo This may take several minutes...
+:: Upgrade pip
 "%PYTHON_EXE%" -m pip install --upgrade pip >nul 2>&1
-"%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-if errorlevel 1 (
-    echo [WARN] CUDA version failed, trying CPU version...
-    "%PYTHON_EXE%" -m pip install torch torchvision torchaudio
+
+:: Detect NVIDIA GPU
+echo.
+echo Detecting GPU...
+nvidia-smi >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] NVIDIA GPU detected - installing PyTorch with CUDA support
+    echo This may take several minutes (downloading ~2.5GB)...
+    "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    if errorlevel 1 (
+        echo [WARN] CUDA version failed, trying CPU version...
+        "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    )
+) else (
+    echo [INFO] No NVIDIA GPU detected - installing PyTorch CPU version
+    echo This may take a few minutes (downloading ~200MB)...
+    "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 )
 
 :: Install other requirements
