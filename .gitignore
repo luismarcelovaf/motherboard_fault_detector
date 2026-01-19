@@ -19,21 +19,18 @@ dist/
 *.egg-info/
 *.egg
 
-# Model outputs (large files - stored on Hugging Face)
-outputs/models/
+# Trained models (large files - stored on Hugging Face)
+models/
 *.pt
 *.pth
 *.onnx
 *.safetensors
 
-# Prediction outputs
-outputs/predictions/
-
 # Inference outputs (keep input, ignore output)
 inference/output/
 
 # Logs
-outputs/logs/
+logs/
 *.log
 
 # Jupyter Notebook

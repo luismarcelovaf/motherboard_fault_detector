@@ -127,8 +127,7 @@ inference:
 
 # Output configuration
 output:
-  models_dir: "outputs/models"
-  predictions_dir: "outputs/predictions"
+  models_dir: "models"
   save_heatmaps: true
   save_bbox_visualizations: true
 
@@ -142,4 +141,4 @@ hardware:
 logging:
   level: "INFO"
   save_logs: true
-  log_dir: "outputs/logs"
+  log_dir: "logs"

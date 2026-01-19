@@ -47,19 +47,19 @@ def parse_args():
     parser.add_argument(
         "--patchcore-model",
         type=str,
-        default="outputs/models/patchcore.pt",
+        default="models/patchcore.pt",
         help="Path to trained PatchCore model",
     )
     parser.add_argument(
         "--classifier-model",
         type=str,
-        default="outputs/models/classifier.pt",
+        default="models/classifier.pt",
         help="Path to trained classifier model",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/predictions",
+        default="inference/output",
         help="Directory for output files",
     )
     parser.add_argument(

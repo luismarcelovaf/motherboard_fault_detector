@@ -83,35 +83,35 @@ echo.
 echo Upgrading pip...
 "%PYTHON_EXE%" -m pip install --upgrade pip >nul 2>&1
 
-:: Detect NVIDIA GPU
+:: Detect NVIDIA GPU (using simple approach to avoid batch scripting issues)
 echo.
 echo Detecting GPU...
 set HAS_GPU=0
 
-:: Check if nvidia-smi exists and works
-where nvidia-smi >nul 2>&1
-if !errorlevel! equ 0 (
-    nvidia-smi >nul 2>&1
-    if !errorlevel! equ 0 (
-        set HAS_GPU=1
-    )
-)
+:: Try to run nvidia-smi - if it works, we have a GPU
+nvidia-smi --query-gpu=name --format=csv,noheader >nul 2>&1 && set HAS_GPU=1
 
-if "!HAS_GPU!"=="1" (
+:: Install PyTorch based on GPU detection
+if "%HAS_GPU%"=="1" (
     echo [OK] NVIDIA GPU detected - installing PyTorch with CUDA support
     echo This may take several minutes - downloading ~2.5GB...
     "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-    if !errorlevel! neq 0 (
+    if errorlevel 1 (
         echo [WARN] CUDA version failed, trying CPU version...
-        "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        goto :install_cpu_torch
     )
 ) else (
     echo [INFO] No NVIDIA GPU detected - installing PyTorch CPU version
-    echo This may take a few minutes - downloading ~200MB...
-    "%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    goto :install_cpu_torch
 )
+goto :after_torch_install
 
-if !errorlevel! neq 0 (
+:install_cpu_torch
+echo This may take a few minutes - downloading ~200MB...
+"%PYTHON_EXE%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+:after_torch_install
+if errorlevel 1 (
     echo [ERROR] Failed to install PyTorch!
     pause
     exit /b 1

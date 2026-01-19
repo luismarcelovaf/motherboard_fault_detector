@@ -12,8 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 # Model paths
-PATCHCORE_PATH = Path("outputs/models/patchcore.pt")
-CLASSIFIER_PATH = Path("outputs/models/classifier.pt")
+PATCHCORE_PATH = Path("models/patchcore.pt")
+CLASSIFIER_PATH = Path("models/classifier.pt")
 
 
 def print_header():

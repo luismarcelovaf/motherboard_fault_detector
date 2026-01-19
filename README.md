@@ -123,8 +123,7 @@ motherboard_fault_detector/
 │   ├── train_patchcore.py  # Train anomaly detector
 │   ├── train_classifier.py # Train defect classifier
 │   └── inference.py        # Run predictions
-└── outputs/
-    └── models/             # Saved model weights (on HuggingFace)
+└── models/                 # Saved model weights (on HuggingFace)
 ```
 
 ## Running Inference

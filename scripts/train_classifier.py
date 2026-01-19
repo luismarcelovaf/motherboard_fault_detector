@@ -53,7 +53,7 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=str,
-        default="outputs/models/classifier.pt",
+        default="models/classifier.pt",
         help="Output path for trained model",
     )
     parser.add_argument(
