@@ -1,0 +1,54 @@
+# Virtual environment
+venv/
+.venv/
+env/
+.env/
+
+# Hugging Face token (sensitive)
+.hf_token
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Model outputs (large files - stored on Hugging Face)
+outputs/models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# Prediction outputs
+outputs/predictions/
+
+# Inference outputs (keep input, ignore output)
+inference/output/
+
+# Logs
+outputs/logs/
+*.log
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp

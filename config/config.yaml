@@ -1,0 +1,145 @@
+# Motherboard Fault Detector Configuration
+
+# Data paths
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  normal_dir: "normal"
+  defect_classes:
+    - "burn_marks"
+    - "reuse_marks"
+    - "liquid_damage"
+    - "label_tampering"
+    - "other_tampering"
+    - "blown_capacitors"
+    - "oxidation_damage"
+
+# Image preprocessing
+preprocessing:
+  target_size: [224, 224]  # For classifier
+  patchcore_size: [256, 256]  # For PatchCore (typically needs larger)
+  clahe:
+    clip_limit: 2.0
+    tile_grid_size: [8, 8]
+  denoise:
+    h: 10
+    template_window_size: 7
+    search_window_size: 21
+
+# Data augmentation
+augmentation:
+  # Expansion factor for defect images (~26 -> ~1300)
+  defect_expansion_factor: 50
+  # Expansion factor for normal images (<20 -> ~600-1000)
+  normal_expansion_factor: 50
+
+  # Geometric transforms
+  geometric:
+    rotation_limit: 30
+    scale_range: [0.8, 1.2]
+    shift_limit: 0.1
+    horizontal_flip_prob: 0.5
+    vertical_flip_prob: 0.3
+    perspective_prob: 0.3
+    elastic_prob: 0.2
+
+  # Color/intensity transforms
+  color:
+    brightness_limit: 0.2
+    contrast_limit: 0.2
+    hue_shift_limit: 10
+    saturation_limit: 20
+    gamma_range: [80, 120]
+
+  # Noise and blur
+  noise:
+    gaussian_noise_var_limit: [10, 50]
+    gaussian_blur_limit: [3, 7]
+    motion_blur_limit: 7
+
+# PatchCore configuration
+patchcore:
+  backbone: "wide_resnet50_2"  # WideResNet-50 pretrained on ImageNet
+  layers_to_extract: ["layer2", "layer3"]  # Feature extraction layers
+  num_neighbors: 9  # k for k-NN scoring
+  coreset_sampling_ratio: 0.1  # Reduce memory bank size
+  input_size: [256, 256]
+
+  # Anomaly detection thresholds
+  thresholds:
+    anomaly_score: 0.5  # Score above this = anomaly
+    pixel_threshold: 0.5  # For heatmap binarization
+
+# Classifier configuration
+classifier:
+  backbone: "efficientnet_b0"
+  pretrained: true
+  num_classes: 7  # burn, reuse, liquid, label, other, blown_capacitors, oxidation
+
+  # Training parameters
+  training:
+    epochs: 100
+    batch_size: 16
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    label_smoothing: 0.1
+    dropout: 0.3
+
+    # Learning rate scheduler
+    scheduler:
+      type: "cosine"
+      warmup_epochs: 5
+      min_lr: 0.00001
+
+    # Early stopping
+    early_stopping:
+      patience: 15
+      min_delta: 0.001
+
+    # Backbone freezing
+    freeze_backbone_epochs: 5
+
+  # Cross-validation
+  cv_folds: 5
+
+# Grad-CAM configuration
+gradcam:
+  target_layers: ["features.8"]  # EfficientNet-B0 last conv layer
+  method: "gradcam++"  # Options: gradcam, gradcam++, scorecam
+
+# Inference configuration
+inference:
+  # Combine PatchCore and Classifier results
+  fusion:
+    patchcore_weight: 0.6
+    classifier_weight: 0.4
+
+  # Bounding box extraction
+  bbox:
+    min_area: 100  # Minimum defect area in pixels
+    max_boxes: 10  # Maximum number of boxes per image
+    nms_threshold: 0.3  # Non-maximum suppression threshold
+
+  # Heatmap thresholding
+  heatmap:
+    threshold: 0.5
+    morphology_kernel: 5
+
+# Output configuration
+output:
+  models_dir: "outputs/models"
+  predictions_dir: "outputs/predictions"
+  save_heatmaps: true
+  save_bbox_visualizations: true
+
+# Hardware configuration
+hardware:
+  device: "cuda"  # "cuda" or "cpu"
+  num_workers: 4
+  pin_memory: true
+
+# Logging
+logging:
+  level: "INFO"
+  save_logs: true
+  log_dir: "outputs/logs"
