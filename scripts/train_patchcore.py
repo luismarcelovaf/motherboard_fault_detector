@@ -131,7 +131,7 @@ def main():
         target_size=tuple(patchcore_config.get("input_size", [256, 256]))
     )
 
-    # Create data loader
+    # Create data loader with augmentation for memory bank
     print(f"\nCreating data loader (augmentation factor: {args.augmentation_factor})...")
     dataloader = create_patchcore_dataloader(
         normal_dir=data_dir,
@@ -144,11 +144,24 @@ def main():
     total_samples = len(image_files) * args.augmentation_factor
     print(f"  Total samples (with augmentation): {total_samples}")
 
+    # Create non-augmented dataloader for calibration
+    calibration_augmentation = PatchCoreAugmentation(
+        target_size=tuple(patchcore_config.get("input_size", [256, 256]))
+    )
+    calibration_augmentation.transform = calibration_augmentation.val_transform  # Use validation (no augmentation)
+    calibration_dataloader = create_patchcore_dataloader(
+        normal_dir=data_dir,
+        augmentation=calibration_augmentation,
+        augmentation_factor=1,  # No augmentation
+        batch_size=args.batch_size,
+        num_workers=config.get("hardware", {}).get("num_workers", 4),
+    )
+
     # Build memory bank
     print("\nBuilding memory bank...")
     print("This may take a while depending on the number of images...")
 
-    model.fit(dataloader)
+    model.fit(dataloader, calibration_dataloader=calibration_dataloader)
 
     print(f"\nMemory bank built successfully!")
     print(f"  Memory bank size: {len(model.memory_bank)}")

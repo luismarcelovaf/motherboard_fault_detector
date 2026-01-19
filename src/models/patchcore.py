@@ -125,6 +125,7 @@ class PatchCoreModel:
         # Memory bank (will be populated during fit)
         self.memory_bank: Optional[torch.Tensor] = None
         self.feature_shape: Optional[Tuple[int, int]] = None
+        self.max_score: float = 1.0  # For normalizing anomaly scores
 
     def _extract_patch_features(
         self,
@@ -221,12 +222,13 @@ class PatchCoreModel:
 
         return features_gpu[indices]
 
-    def fit(self, dataloader: DataLoader) -> None:
+    def fit(self, dataloader: DataLoader, calibration_dataloader: DataLoader = None) -> None:
         """
         Build memory bank from normal images.
 
         Args:
-            dataloader: DataLoader yielding normal images
+            dataloader: DataLoader yielding normal images (can be augmented)
+            calibration_dataloader: Optional non-augmented dataloader for score calibration
         """
         self.feature_extractor.eval()
         all_features = []
@@ -264,6 +266,31 @@ class PatchCoreModel:
 
         print(f"Memory bank size: {len(self.memory_bank)}")
 
+        # Compute normalization factor using augmented data (has realistic variance)
+        print("Computing normalization factor...")
+        self._compute_max_score(dataloader)
+
+    def _compute_max_score(self, dataloader: DataLoader) -> None:
+        """Compute normalization factor from normal training images."""
+        all_scores = []
+        with torch.no_grad():
+            for batch in dataloader:
+                if isinstance(batch, (list, tuple)):
+                    images = batch[0]
+                else:
+                    images = batch
+                images = images.to(self.device)
+                scores, _ = self.predict_batch(images, normalize=False)
+                all_scores.extend(scores.tolist())
+
+        all_scores = np.array(all_scores)
+        # Use 95th percentile - normal images should score below this
+        percentile_95 = np.percentile(all_scores, 95)
+        # Use 4x multiplier to give headroom for normal images to score > 50% Normal
+        self.max_score = percentile_95 * 4.0
+        print(f"Score stats - Mean: {all_scores.mean():.4f}, 95th percentile: {percentile_95:.4f}")
+        print(f"Using {self.max_score:.4f} for normalization")
+
     def predict(
         self,
         image: torch.Tensor
@@ -298,19 +325,23 @@ class PatchCoreModel:
             # memory_bank: (memory_size, feature_dim)
             patch_features = patch_features.squeeze(0)  # (num_patches, feature_dim)
 
-            # k-NN distances
-            distances = torch.cdist(patch_features, self.memory_bank)
-            knn_distances, _ = distances.topk(
-                self.num_neighbors,
-                largest=False,
-                dim=1
-            )
+            # Cosine similarity (1 - similarity = distance, normalized)
+            # Normalize features
+            patch_features_norm = F.normalize(patch_features, p=2, dim=1)
+            memory_bank_norm = F.normalize(self.memory_bank, p=2, dim=1)
 
-            # Anomaly score per patch (mean of k-NN distances)
-            patch_scores = knn_distances.mean(dim=1)
+            # Cosine similarity: higher = more similar
+            cosine_sim = torch.mm(patch_features_norm, memory_bank_norm.t())
+            max_similarity, _ = cosine_sim.max(dim=1)  # Best match for each patch
 
-            # Image-level anomaly score
-            anomaly_score = patch_scores.max().item()
+            # Convert to distance: 1 - similarity (0 = identical, 1 = orthogonal)
+            patch_scores = (1 - max_similarity).cpu().numpy()
+
+            # Image-level anomaly score: use 90th percentile
+            raw_score = np.percentile(patch_scores, 90)
+            anomaly_score = min(raw_score / self.max_score, 1.0)
+
+            patch_scores = torch.from_numpy(patch_scores)  # Convert back for heatmap
 
             # Reshape to heatmap
             H, W = self.feature_shape
@@ -323,20 +354,23 @@ class PatchCoreModel:
                 interpolation=cv2.INTER_LINEAR
             )
 
-            # Normalize heatmap to [0, 1]
-            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+            # Normalize using max_score (consistent across images)
+            # This preserves absolute anomaly levels - normal images stay low
+            heatmap = np.clip(heatmap / self.max_score, 0, 1)
 
         return anomaly_score, heatmap
 
     def predict_batch(
         self,
-        images: torch.Tensor
+        images: torch.Tensor,
+        normalize: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Predict anomaly scores and heatmaps for a batch of images.
 
         Args:
             images: Input tensor of shape (B, C, H, W)
+            normalize: Whether to normalize scores to 0-1 range
 
         Returns:
             Tuple of (anomaly_scores, heatmaps)
@@ -358,22 +392,27 @@ class PatchCoreModel:
             anomaly_scores = []
             heatmaps = []
 
+            # Normalize memory bank once
+            memory_bank_norm = F.normalize(self.memory_bank, p=2, dim=1)
+
             for i in range(B):
                 pf = patch_features[i]  # (num_patches, feature_dim)
 
-                # k-NN distances
-                distances = torch.cdist(pf, self.memory_bank)
-                knn_distances, _ = distances.topk(
-                    self.num_neighbors,
-                    largest=False,
-                    dim=1
-                )
+                # Cosine similarity
+                pf_norm = F.normalize(pf, p=2, dim=1)
+                cosine_sim = torch.mm(pf_norm, memory_bank_norm.t())
+                max_similarity, _ = cosine_sim.max(dim=1)
 
-                # Anomaly score per patch
-                patch_scores = knn_distances.mean(dim=1)
+                # Convert to distance
+                patch_scores = 1 - max_similarity
 
-                # Image-level score
-                anomaly_scores.append(patch_scores.max().item())
+                # Image-level score: 90th percentile
+                raw_score = np.percentile(patch_scores.cpu().numpy(), 90)
+                if normalize:
+                    score = min(raw_score / self.max_score, 1.0)
+                else:
+                    score = raw_score
+                anomaly_scores.append(score)
 
                 # Heatmap
                 heatmap = patch_scores.reshape(H, W).cpu().numpy()
@@ -382,7 +421,8 @@ class PatchCoreModel:
                     (self.input_size[1], self.input_size[0]),
                     interpolation=cv2.INTER_LINEAR
                 )
-                heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+                # Normalize using max_score (consistent across images)
+                heatmap = np.clip(heatmap / self.max_score, 0, 1)
                 heatmaps.append(heatmap)
 
         return np.array(anomaly_scores), np.stack(heatmaps)
@@ -395,6 +435,7 @@ class PatchCoreModel:
         state = {
             "memory_bank": self.memory_bank.cpu() if self.memory_bank is not None else None,
             "feature_shape": self.feature_shape,
+            "max_score": self.max_score,
             "config": {
                 "backbone": self.backbone_name,
                 "layers_to_extract": self.layers_to_extract,
@@ -409,10 +450,11 @@ class PatchCoreModel:
     def load(self, path: Union[str, Path]) -> None:
         """Load a saved model."""
         path = Path(path)
-        state = torch.load(path, map_location=self.device)
+        state = torch.load(path, map_location=self.device, weights_only=False)
 
         self.memory_bank = state["memory_bank"].to(self.device)
         self.feature_shape = state["feature_shape"]
+        self.max_score = state.get("max_score", 1.0)
 
         config = state["config"]
         self.backbone_name = config["backbone"]

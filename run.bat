@@ -1,6 +1,10 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Check for API mode BEFORE inner call wrapper
+if /i "%1"=="api" goto :api_direct
+if /i "%1"=="--api" goto :api_direct
+
 :: Catch any crashes
 if "%1"=="__INNER__" goto :main
 cmd /c "%~f0" __INNER__ %*
@@ -11,12 +15,30 @@ if errorlevel 1 (
 )
 exit /b %errorlevel%
 
+:api_direct
+:: API mode called directly, run inner with API flag
+cmd /c "%~f0" __INNER__ __API__
+exit /b %errorlevel%
+
 :main
-title Motherboard Fault Detection AI
+:: Check if API mode was requested
+set API_MODE=0
+if "%2"=="__API__" set API_MODE=1
+
+if %API_MODE%==1 (
+    title Motherboard Fault Detection API
+) else (
+    title Motherboard Fault Detection AI
+)
 
 echo ============================================================
-echo   MOTHERBOARD FAULT DETECTION AI
-echo   Startup Script
+if %API_MODE%==1 (
+    echo   MOTHERBOARD FAULT DETECTION API
+    echo   API Server Mode
+) else (
+    echo   MOTHERBOARD FAULT DETECTION AI
+    echo   Startup Script
+)
 echo ============================================================
 echo.
 
@@ -146,11 +168,22 @@ if errorlevel 1 (
 echo.
 
 :run_main
-:: Run main application
-echo Starting application...
-echo ============================================================
-echo.
-"%PYTHON_EXE%" main.py
+:: Run main application or API server
+if %API_MODE%==1 (
+    echo Starting API server...
+    echo ============================================================
+    echo.
+    echo Usage: run.bat api
+    echo.
+    echo To stop the server, press Ctrl+C
+    echo.
+    "%PYTHON_EXE%" api_server.py
+) else (
+    echo Starting application...
+    echo ============================================================
+    echo.
+    "%PYTHON_EXE%" main.py
+)
 set EXIT_CODE=%errorlevel%
 
 echo.

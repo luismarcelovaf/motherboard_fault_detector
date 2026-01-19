@@ -334,7 +334,7 @@ class ClassifierTrainer:
     def train(
         self,
         train_loader: DataLoader,
-        val_loader: DataLoader,
+        val_loader: Optional[DataLoader] = None,
         epochs: int = 100,
         class_weights: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
@@ -343,7 +343,7 @@ class ClassifierTrainer:
 
         Args:
             train_loader: Training data loader
-            val_loader: Validation data loader
+            val_loader: Validation data loader (optional)
             epochs: Maximum number of epochs
             class_weights: Optional class weights
 
@@ -360,14 +360,17 @@ class ClassifierTrainer:
             print(f"\nEpoch {epoch + 1}/{self.freeze_backbone_epochs}")
 
             train_metrics = self.train_epoch(train_loader, class_weights)
-            val_metrics = self.validate(val_loader)
 
-            self._log_epoch(epoch, train_metrics, val_metrics)
-            self._check_improvement(val_metrics["f1"])
-
-            if self.epochs_without_improvement >= self.patience:
-                print("Early stopping triggered in phase 1")
-                break
+            if val_loader is not None:
+                val_metrics = self.validate(val_loader)
+                self._log_epoch(epoch, train_metrics, val_metrics)
+                self._check_improvement(val_metrics["f1"])
+                if self.epochs_without_improvement >= self.patience:
+                    print("Early stopping triggered in phase 1")
+                    break
+            else:
+                self._log_epoch_train_only(epoch, train_metrics)
+                self._save_model_state()
 
         # Phase 2: Fine-tune entire model
         remaining_epochs = epochs - self.freeze_backbone_epochs
@@ -381,19 +384,21 @@ class ClassifierTrainer:
                 print(f"\nEpoch {self.freeze_backbone_epochs + epoch + 1}/{epochs}")
 
                 train_metrics = self.train_epoch(train_loader, class_weights)
-                val_metrics = self.validate(val_loader)
 
-                self._log_epoch(self.freeze_backbone_epochs + epoch, train_metrics, val_metrics)
-                self._check_improvement(val_metrics["f1"])
-
-                if self.epochs_without_improvement >= self.patience:
-                    print("Early stopping triggered in phase 2")
-                    break
+                if val_loader is not None:
+                    val_metrics = self.validate(val_loader)
+                    self._log_epoch(self.freeze_backbone_epochs + epoch, train_metrics, val_metrics)
+                    self._check_improvement(val_metrics["f1"])
+                    if self.epochs_without_improvement >= self.patience:
+                        print("Early stopping triggered in phase 2")
+                        break
+                else:
+                    self._log_epoch_train_only(self.freeze_backbone_epochs + epoch, train_metrics)
+                    self._save_model_state()
 
         # Restore best model
         if self.best_model_state is not None:
             self.model.load_state_dict(self.best_model_state)
-            print(f"\nRestored best model with F1: {self.best_val_f1:.4f}")
 
         return {
             "history": self.training_history,
@@ -435,8 +440,26 @@ class ClassifierTrainer:
         else:
             self.epochs_without_improvement += 1
 
-    def save_model(self, path: Union[str, Path]):
-        """Save model checkpoint."""
+    def _log_epoch_train_only(self, epoch: int, train_metrics: Dict[str, float]):
+        """Log epoch metrics when no validation."""
+        metrics = {
+            "epoch": epoch + 1,
+            "train_loss": train_metrics["loss"],
+            "train_acc": train_metrics["accuracy"],
+            "train_f1": train_metrics["f1"],
+        }
+        self.training_history.append(metrics)
+        print(f"Train - Loss: {train_metrics['loss']:.4f}, "
+              f"Acc: {train_metrics['accuracy']:.4f}, "
+              f"F1: {train_metrics['f1']:.4f}")
+
+    def _save_model_state(self):
+        """Save current model state as best."""
+        self.best_model_state = copy.deepcopy(self.model.state_dict())
+        self.best_val_f1 = 1.0
+
+    def save_model(self, path: Union[str, Path], class_names: Optional[List[str]] = None):
+        """Save model checkpoint with class names."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -447,16 +470,19 @@ class ClassifierTrainer:
                 "num_classes": self.model.num_classes,
                 "feature_dim": self.model.feature_dim,
             },
+            "class_names": class_names,  # Store class names for inference
             "training_history": self.training_history,
             "best_f1": self.best_val_f1,
         }
         torch.save(checkpoint, path)
         print(f"Model saved to {path}")
+        if class_names:
+            print(f"  Classes: {class_names}")
 
     def load_model(self, path: Union[str, Path]):
         """Load model checkpoint."""
         path = Path(path)
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.training_history = checkpoint.get("training_history", [])

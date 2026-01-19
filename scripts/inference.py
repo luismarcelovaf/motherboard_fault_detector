@@ -21,7 +21,7 @@ from tqdm import tqdm
 from src.inference.predictor import FaultDetector, load_detector_from_config
 from src.models.patchcore import PatchCoreModel
 from src.models.classifier import DefectClassifier
-from src.data.dataset import CLASS_NAMES
+from src.data.dataset import discover_defect_classes
 
 
 def parse_args():
@@ -84,6 +84,12 @@ def parse_args():
         action="store_true",
         help="Output results as JSON",
     )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="data/raw",
+        help="Data directory to discover class names from (default: data/raw)",
+    )
     return parser.parse_args()
 
 
@@ -124,18 +130,37 @@ def load_models(args, config):
     patchcore.load(patchcore_path)
     print(f"  PatchCore loaded from {patchcore_path}")
 
-    # Load classifier
+    # Load classifier checkpoint first to get num_classes
+    checkpoint = torch.load(classifier_path, map_location=device, weights_only=False)
+    checkpoint_config = checkpoint.get("config", {})
+
+    # Use num_classes from checkpoint (what model was trained with)
     classifier_config = config.get("classifier", {})
+    num_classes = checkpoint_config.get("num_classes", classifier_config.get("num_classes", 5))
+
     classifier = DefectClassifier(
-        backbone=classifier_config.get("backbone", "efficientnet_b0"),
-        num_classes=classifier_config.get("num_classes", 5),
+        backbone=checkpoint_config.get("backbone", classifier_config.get("backbone", "efficientnet_b0")),
+        num_classes=num_classes,
         pretrained=False,
     )
 
-    checkpoint = torch.load(classifier_path, map_location=device)
     classifier.load_state_dict(checkpoint["model_state_dict"])
     print(f"  Classifier loaded from {classifier_path}")
+    print(f"  Model has {num_classes} classes")
     print(f"  Best validation F1: {checkpoint.get('best_f1', 'N/A')}")
+
+    # Get class names from checkpoint (saved during training)
+    class_names = checkpoint.get("class_names")
+    if class_names:
+        print(f"  Classes from checkpoint: {class_names}")
+    else:
+        # Fallback: discover from data directory (for old checkpoints)
+        print("  Warning: No class_names in checkpoint (old model format)")
+        data_dir = Path(args.data_dir)
+        _, class_names = discover_defect_classes(data_dir)
+        if not class_names:
+            class_names = config.get("data", {}).get("defect_classes", [])
+        print(f"  Discovered classes: {class_names}")
 
     # Create detector
     inference_config = config.get("inference", {})
@@ -148,7 +173,7 @@ def load_models(args, config):
         anomaly_threshold=args.threshold,
         patchcore_weight=fusion_config.get("patchcore_weight", 0.6),
         classifier_weight=fusion_config.get("classifier_weight", 0.4),
-        class_names=config.get("data", {}).get("defect_classes", CLASS_NAMES),
+        class_names=class_names,
     )
 
     return detector
@@ -216,9 +241,19 @@ def print_result(image_name, result):
         print(f"Error: {result['error']}")
         return
 
+    # Normal likelihood from PatchCore (inverse of anomaly score)
+    normal_pct = (1 - result['anomaly_score']) * 100
+    print(f"Normal: {normal_pct:.1f}%")
+
+    # Top classification from classifier
+    class_probs = result.get("class_probabilities", {})
+    if class_probs:
+        top_class = max(class_probs, key=class_probs.get)
+        top_conf = class_probs[top_class] * 100
+        print(f"Top defect class: {top_class} ({top_conf:.1f}%)")
+
     status = "DEFECT DETECTED" if result["is_anomaly"] else "NORMAL"
     print(f"Status: {status}")
-    print(f"Anomaly Score: {result['anomaly_score']:.4f}")
 
     if result["is_anomaly"]:
         print(f"Classification: {result['classification']} ({result['confidence']:.2%})")

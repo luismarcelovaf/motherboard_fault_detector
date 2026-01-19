@@ -5,14 +5,7 @@ data:
   raw_dir: "data/raw"
   processed_dir: "data/processed"
   normal_dir: "normal"
-  defect_classes:
-    - "burn_marks"
-    - "reuse_marks"
-    - "liquid_damage"
-    - "label_tampering"
-    - "other_tampering"
-    - "blown_capacitors"
-    - "oxidation_damage"
+  # defect_classes are now discovered automatically from folder names in data/raw/
 
 # Image preprocessing
 preprocessing:
@@ -29,9 +22,9 @@ preprocessing:
 # Data augmentation
 augmentation:
   # Expansion factor for defect images (~26 -> ~1300)
-  defect_expansion_factor: 50
+  defect_expansion_factor: 10
   # Expansion factor for normal images (<20 -> ~600-1000)
-  normal_expansion_factor: 50
+  normal_expansion_factor: 10
 
   # Geometric transforms
   geometric:
@@ -67,14 +60,15 @@ patchcore:
 
   # Anomaly detection thresholds
   thresholds:
-    anomaly_score: 0.5  # Score above this = anomaly
+    anomaly_score: 0.5  # PatchCore: score above this = anomaly
+    classifier_confidence: 0.40  # Classifier: confidence above this = fault (overrides PatchCore)
     pixel_threshold: 0.5  # For heatmap binarization
 
 # Classifier configuration
 classifier:
   backbone: "efficientnet_b0"
   pretrained: true
-  num_classes: 7  # burn, reuse, liquid, label, other, blown_capacitors, oxidation
+  # num_classes is auto-detected from data/raw/ folders during training
 
   # Training parameters
   training:
@@ -83,7 +77,7 @@ classifier:
     learning_rate: 0.001
     weight_decay: 0.0001
     label_smoothing: 0.1
-    dropout: 0.3
+    dropout: 0.5
 
     # Learning rate scheduler
     scheduler:

@@ -106,7 +106,13 @@ class HeatmapToBoundingBox:
         Returns:
             Binary mask
         """
-        return (heatmap > self.threshold).astype(np.uint8) * 255
+        # Use relative threshold: mean + std of heatmap values
+        # This adapts to each heatmap's distribution
+        mean_val = heatmap.mean()
+        std_val = heatmap.std()
+        adaptive_thresh = max(mean_val + std_val, self.threshold)
+
+        return (heatmap > adaptive_thresh).astype(np.uint8) * 255
 
     def _apply_morphology(self, binary_mask: np.ndarray) -> np.ndarray:
         """

@@ -17,7 +17,7 @@ from ..models.classifier import DefectClassifier
 from ..visualization.gradcam import GradCAMWrapper
 from ..visualization.heatmap import HeatmapProcessor, save_heatmap, DefectVisualizer
 from ..data.preprocessing import ImagePreprocessor
-from ..data.dataset import CLASS_NAMES
+from ..data.dataset import discover_defect_classes
 from .postprocessing import (
     HeatmapToBoundingBox,
     DetectionResult,
@@ -40,6 +40,7 @@ class FaultDetector:
         classifier_model: DefectClassifier,
         device: str = "cuda",
         anomaly_threshold: float = 0.5,
+        classifier_confidence_threshold: float = 0.7,
         patchcore_weight: float = 0.6,
         classifier_weight: float = 0.4,
         class_names: Optional[List[str]] = None,
@@ -51,7 +52,8 @@ class FaultDetector:
             patchcore_model: Trained PatchCore model
             classifier_model: Trained defect classifier
             device: Device to run inference on
-            anomaly_threshold: Threshold for anomaly decision
+            anomaly_threshold: Threshold for PatchCore anomaly decision
+            classifier_confidence_threshold: If classifier confidence exceeds this, mark as fault
             patchcore_weight: Weight for PatchCore heatmap in fusion
             classifier_weight: Weight for Grad-CAM heatmap in fusion
             class_names: List of defect class names
@@ -80,7 +82,10 @@ class FaultDetector:
 
         # Parameters
         self.anomaly_threshold = anomaly_threshold
-        self.class_names = class_names or CLASS_NAMES
+        self.classifier_confidence_threshold = classifier_confidence_threshold
+        if class_names is None:
+            raise ValueError("class_names must be provided (discovered from data folder)")
+        self.class_names = class_names
 
         # Visualization
         self.visualizer = DefectVisualizer(class_names=self.class_names)
@@ -186,14 +191,17 @@ class FaultDetector:
             target_size=image_rgb_256.shape[:2],
         )
 
-        # ===== Extract Bounding Boxes =====
-        is_anomaly = anomaly_score > self.anomaly_threshold
-        defect_type = self.class_names[predicted_class] if is_anomaly else "normal"
+        # ===== Decision Logic =====
+        # Classifier only - includes "normal" as a class
+        classifier_prediction = self.class_names[predicted_class]
+        is_anomaly = classifier_prediction != "normal"
+        defect_type = classifier_prediction
 
         bounding_boxes = []
         if is_anomaly:
+            # Use GradCAM for bounding boxes - it shows where classifier sees the specific defect
             bounding_boxes = self.bbox_converter.convert(
-                combined_heatmap,
+                gradcam_heatmap,
                 defect_type=defect_type,
             )
 
@@ -202,6 +210,7 @@ class FaultDetector:
             "is_anomaly": is_anomaly,
             "anomaly_score": float(anomaly_score),
             "classification": defect_type,
+            "classifier_prediction": classifier_prediction,
             "confidence": float(confidence),
             "class_probabilities": {
                 self.class_names[i]: float(probs[0, i])
@@ -422,30 +431,58 @@ def load_detector_from_config(
     )
     patchcore.load(patchcore_checkpoint)
 
-    # Load classifier
+    # Load classifier checkpoint first to get num_classes
+    checkpoint = torch.load(classifier_checkpoint, map_location=device, weights_only=False)
+    checkpoint_config = checkpoint.get("config", {})
+
+    # Use num_classes from checkpoint (what model was trained with)
     classifier_config = config.get("classifier", {})
+    num_classes = checkpoint_config.get("num_classes", classifier_config.get("num_classes", 5))
+
     classifier = DefectClassifier(
-        backbone=classifier_config.get("backbone", "efficientnet_b0"),
-        num_classes=classifier_config.get("num_classes", 5),
+        backbone=checkpoint_config.get("backbone", classifier_config.get("backbone", "efficientnet_b0")),
+        num_classes=num_classes,
         pretrained=False,  # Will load from checkpoint
     )
 
-    checkpoint = torch.load(classifier_checkpoint, map_location=device)
     classifier.load_state_dict(checkpoint["model_state_dict"])
+    print(f"  Classifier loaded with {num_classes} classes")
 
     # Create detector
     inference_config = config.get("inference", {})
     fusion_config = inference_config.get("fusion", {})
     threshold_config = patchcore_config.get("thresholds", {})
 
+    # Get class names: 1) from checkpoint, 2) from data folder, 3) from config
+    class_names = checkpoint.get("class_names")
+    if class_names:
+        print(f"  Classes from checkpoint: {class_names}")
+    else:
+        # Try discovering from data directory
+        data_dir = Path(config.get("data", {}).get("raw_dir", "data/raw"))
+        _, class_names = discover_defect_classes(data_dir)
+        if class_names:
+            print(f"  Classes discovered from {data_dir}: {class_names}")
+        else:
+            # Last resort: config file
+            class_names = config.get("data", {}).get("defect_classes")
+            if class_names:
+                print(f"  Classes from config: {class_names}")
+
+    if not class_names:
+        raise ValueError(
+            "No class_names found. Either retrain classifier or add defect folders to data/raw/"
+        )
+
     detector = FaultDetector(
         patchcore_model=patchcore,
         classifier_model=classifier,
         device=device,
         anomaly_threshold=threshold_config.get("anomaly_score", 0.5),
+        classifier_confidence_threshold=threshold_config.get("classifier_confidence", 0.7),
         patchcore_weight=fusion_config.get("patchcore_weight", 0.6),
         classifier_weight=fusion_config.get("classifier_weight", 0.4),
-        class_names=config.get("data", {}).get("defect_classes", CLASS_NAMES),
+        class_names=class_names,
     )
 
     return detector
@@ -473,12 +510,24 @@ def create_detector(
     patchcore_config = config.get("patchcore", {})
     threshold_config = patchcore_config.get("thresholds", {})
 
+    # Get class names from config or discover from data folder
+    class_names = config.get("data", {}).get("defect_classes")
+    if not class_names:
+        data_dir = Path(config.get("data", {}).get("raw_dir", "data/raw"))
+        _, class_names = discover_defect_classes(data_dir)
+
+    if not class_names:
+        raise ValueError(
+            "No class_names found. Add defect folders to data/raw/ or set in config."
+        )
+
     return FaultDetector(
         patchcore_model=patchcore_model,
         classifier_model=classifier_model,
         device=hardware_config.get("device", "cuda"),
         anomaly_threshold=threshold_config.get("anomaly_score", 0.5),
+        classifier_confidence_threshold=threshold_config.get("classifier_confidence", 0.7),
         patchcore_weight=fusion_config.get("patchcore_weight", 0.6),
         classifier_weight=fusion_config.get("classifier_weight", 0.4),
-        class_names=config.get("data", {}).get("defect_classes", CLASS_NAMES),
+        class_names=class_names,
     )

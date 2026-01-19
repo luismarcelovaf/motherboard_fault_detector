@@ -29,3 +29,9 @@ tqdm>=4.65.0
 
 # Image handling
 Pillow>=9.5.0
+
+# API Server
+flask>=3.0.0
+
+# Hugging Face Hub
+huggingface_hub>=0.20.0

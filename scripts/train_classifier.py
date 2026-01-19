@@ -25,8 +25,7 @@ from src.models.classifier import (
 from src.data.dataset import (
     MotherboardDataset,
     create_data_loaders,
-    DEFECT_CLASSES,
-    CLASS_NAMES,
+    discover_defect_classes,
 )
 from src.data.augmentation import (
     AugmentationPipeline,
@@ -71,8 +70,8 @@ def parse_args():
     parser.add_argument(
         "--augmentation-factor",
         type=int,
-        default=50,
-        help="Number of augmented versions per image",
+        default=None,  # Will use config value if not specified
+        help="Number of augmented versions per image (default: from config)",
     )
     parser.add_argument(
         "--cv-folds",
@@ -96,11 +95,14 @@ def parse_args():
 
 
 def count_samples(data_dir: Path) -> dict:
-    """Count samples per class."""
+    """Count samples per class (discovered dynamically from folders)."""
     image_extensions = [".jpg", ".jpeg", ".png", ".bmp"]
+
+    # Discover classes dynamically from folder structure
+    defect_classes, _ = discover_defect_classes(data_dir)
     counts = {}
 
-    for class_name in DEFECT_CLASSES.keys():
+    for class_name in defect_classes.keys():
         class_dir = data_dir / class_name
         if class_dir.exists():
             count = len([
@@ -108,8 +110,6 @@ def count_samples(data_dir: Path) -> dict:
                 if f.suffix.lower() in image_extensions
             ])
             counts[class_name] = count
-        else:
-            counts[class_name] = 0
 
     return counts
 
@@ -121,6 +121,7 @@ def train_single_fold(
     config,
     args,
     fold=None,
+    skip_validation=False,
 ):
     """Train a single fold."""
     device = args.device
@@ -140,15 +141,6 @@ def train_single_fold(
     )
     train_dataset.samples = train_samples
 
-    # Validation dataset without augmentation
-    val_dataset = MotherboardDataset(
-        data_dir=args.data_dir,
-        augmentation_pipeline=augmentation_pipeline,
-        is_training=False,
-        augmentation_factor=1,
-    )
-    val_dataset.samples = val_samples
-
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
@@ -159,15 +151,29 @@ def train_single_fold(
         drop_last=True,
     )
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=config.get("hardware", {}).get("num_workers", 4),
-        pin_memory=True,
-    )
+    val_loader = None
+    if not skip_validation:
+        val_dataset = MotherboardDataset(
+            data_dir=args.data_dir,
+            augmentation_pipeline=augmentation_pipeline,
+            is_training=False,
+            augmentation_factor=1,
+        )
+        val_dataset.samples = val_samples
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=config.get("hardware", {}).get("num_workers", 4),
+            pin_memory=True,
+        )
 
-    # Create model
+    # Override num_classes in config with discovered classes from dataset
+    if "classifier" not in config:
+        config["classifier"] = {}
+    config["classifier"]["num_classes"] = train_dataset.num_classes
+
+    # Create model with correct num_classes
     model = create_classifier_from_config(config)
 
     # Create trainer
@@ -182,7 +188,8 @@ def train_single_fold(
         print(f"\n--- Fold {fold + 1} ---")
 
     print(f"Training samples: {len(train_samples)} (x{args.augmentation_factor} = {len(train_samples) * args.augmentation_factor})")
-    print(f"Validation samples: {len(val_samples)}")
+    if not skip_validation:
+        print(f"Validation samples: {len(val_samples)}")
 
     # Train
     training_config = config.get("classifier", {}).get("training", {})
@@ -219,28 +226,32 @@ def main():
         print(f"Error: Data directory not found: {data_dir}")
         print("\nPlease organize your data as follows:")
         print(f"  {data_dir}/")
-        print("    ├── burn_marks/")
+        print("    ├── <class_name_1>/")
         print("    │   ├── image1.jpg")
         print("    │   └── ...")
-        print("    ├── reuse_marks/")
-        print("    ├── liquid_damage/")
-        print("    ├── label_tampering/")
-        print("    └── other_tampering/")
+        print("    ├── <class_name_2>/")
+        print("    └── ...")
+        print("\nClass names are discovered automatically from folder names.")
         return 1
 
-    # Count samples
-    print("\nDataset Summary:")
+    # Count samples (classes discovered dynamically from folders)
+    print("\nDataset Summary (classes discovered from folders):")
     sample_counts = count_samples(data_dir)
     total_samples = 0
     for class_name, count in sample_counts.items():
         print(f"  {class_name}: {count} images")
         total_samples += count
 
-    print(f"  Total: {total_samples} images")
+    print(f"  Total: {total_samples} images across {len(sample_counts)} classes")
 
     if total_samples == 0:
         print("\nError: No images found!")
+        print("Make sure your data directory contains subdirectories with images.")
         return 1
+
+    # Get augmentation factor from config if not specified via CLI
+    if args.augmentation_factor is None:
+        args.augmentation_factor = config.get("augmentation", {}).get("defect_expansion_factor", 50)
 
     # Create augmentation pipeline
     print("\nSetting up augmentation pipeline...")
@@ -313,20 +324,25 @@ def main():
         # Single train/val split (either requested or too few samples for CV)
         if args.cv_folds > 1 and not can_do_cv:
             print(f"\n[!] Too few samples per class for {args.cv_folds}-fold CV (min class has {min_class_count} samples)")
-        print(f"Using single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})...")
 
-        # Shuffle and split
+        # Shuffle samples
         import random
         random.seed(42)
         indices = list(range(len(samples)))
         random.shuffle(indices)
 
-        val_size = int(len(samples) * args.val_split)
-        val_indices = indices[:val_size]
-        train_indices = indices[val_size:]
-
-        train_samples = [samples[i] for i in train_indices]
-        val_samples = [samples[i] for i in val_indices]
+        if args.val_split == 0:
+            train_samples = [samples[i] for i in indices]
+            val_samples = []
+            skip_validation = True
+        else:
+            print(f"Using single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})...")
+            val_size = int(len(samples) * args.val_split)
+            val_indices = indices[:val_size]
+            train_indices = indices[val_size:]
+            train_samples = [samples[i] for i in train_indices]
+            val_samples = [samples[i] for i in val_indices]
+            skip_validation = False
 
         trainer, result = train_single_fold(
             train_samples=train_samples,
@@ -334,17 +350,17 @@ def main():
             augmentation_pipeline=augmentation_pipeline,
             config=config,
             args=args,
+            skip_validation=skip_validation,
         )
 
-    # Save model
+    # Save model with class names
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    trainer.save_model(output_path)
+    trainer.save_model(output_path, class_names=full_dataset.class_names)
 
     print("\n" + "=" * 60)
     print("Training Complete!")
     print("=" * 60)
-    print(f"Best validation F1: {trainer.best_val_f1:.4f}")
     print(f"Model saved to: {output_path}")
 
     # Print usage instructions

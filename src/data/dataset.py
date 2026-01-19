@@ -15,24 +15,61 @@ from .augmentation import AugmentationPipeline, PatchCoreAugmentation
 from .preprocessing import ImagePreprocessor
 
 
-# Defect class mapping
-DEFECT_CLASSES = {
-    "burn_marks": 0,
-    "reuse_marks": 1,
-    "liquid_damage": 2,
-    "label_tampering": 3,
-    "other_tampering": 4,
-    "blown_capacitors": 5,
-    "oxidation_damage": 6,
-}
+# Valid image extensions
+IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp"]
 
-CLASS_NAMES = list(DEFECT_CLASSES.keys())
+
+def discover_defect_classes(data_dir: Union[str, Path]) -> Tuple[Dict[str, int], List[str]]:
+    """
+    Discover classes dynamically from subdirectories.
+
+    Only includes folders that contain at least one image file.
+    Includes 'normal' as first class (index 0).
+
+    Args:
+        data_dir: Root directory containing class subdirectories
+
+    Returns:
+        Tuple of (class_to_idx dict, list of class names)
+    """
+    data_dir = Path(data_dir)
+    classes = {}
+    idx = 0
+
+    if not data_dir.exists():
+        return {}, []
+
+    # Sort for consistent ordering, but put 'normal' first
+    subdirs = sorted(data_dir.iterdir(), key=lambda x: (x.name != "normal", x.name))
+
+    for subdir in subdirs:
+        if subdir.is_dir():
+            # Check if folder has any images
+            has_images = any(
+                list(subdir.glob(f"*{ext}")) + list(subdir.glob(f"*{ext.upper()}"))
+                for ext in IMAGE_EXTENSIONS
+            )
+            if has_images:
+                classes[subdir.name] = idx
+                idx += 1
+
+    class_names = list(classes.keys())
+    return classes, class_names
+
+
+# For backward compatibility - these will be None until a dataset is created
+# Prefer using dataset.defect_classes and dataset.class_names instead
+DEFECT_CLASSES: Optional[Dict[str, int]] = None
+CLASS_NAMES: Optional[List[str]] = None
 
 
 class MotherboardDataset(Dataset):
     """
-    PyTorch Dataset for motherboard images with defect classification.
+    PyTorch Dataset for motherboard images with classification.
     Supports on-the-fly augmentation for training.
+
+    Classes are discovered dynamically from subdirectory names.
+    Includes 'normal' as a class.
     """
 
     def __init__(
@@ -42,7 +79,6 @@ class MotherboardDataset(Dataset):
         preprocessor: Optional[ImagePreprocessor] = None,
         is_training: bool = True,
         augmentation_factor: int = 1,
-        include_normal: bool = False,
     ):
         """
         Initialize the dataset.
@@ -53,14 +89,16 @@ class MotherboardDataset(Dataset):
             preprocessor: Image preprocessor (optional, augmentation handles resize)
             is_training: Whether this is for training (applies augmentation)
             augmentation_factor: Number of augmented versions per image
-            include_normal: Whether to include normal images (as class -1)
         """
         self.data_dir = Path(data_dir)
         self.augmentation = augmentation_pipeline
         self.preprocessor = preprocessor
         self.is_training = is_training
         self.augmentation_factor = augmentation_factor if is_training else 1
-        self.include_normal = include_normal
+
+        # Discover defect classes dynamically (excludes normal)
+        self.defect_classes, self.class_names = discover_defect_classes(self.data_dir)
+        self.num_classes = len(self.defect_classes)
 
         # Collect image paths and labels
         self.samples: List[Tuple[Path, int]] = []
@@ -68,23 +106,16 @@ class MotherboardDataset(Dataset):
 
     def _load_samples(self):
         """Load image paths and labels from directory structure."""
-        # Load defect images
-        for class_name, class_idx in DEFECT_CLASSES.items():
+        # Load defect images only (normal excluded)
+        for class_name, class_idx in self.defect_classes.items():
             class_dir = self.data_dir / class_name
             if class_dir.exists():
                 for img_path in class_dir.glob("*"):
-                    if img_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
+                    if img_path.suffix.lower() in IMAGE_EXTENSIONS:
                         self.samples.append((img_path, class_idx))
 
-        # Optionally load normal images
-        if self.include_normal:
-            normal_dir = self.data_dir / "normal"
-            if normal_dir.exists():
-                for img_path in normal_dir.glob("*"):
-                    if img_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
-                        self.samples.append((img_path, -1))  # -1 for normal
-
         print(f"Loaded {len(self.samples)} images from {self.data_dir}")
+        print(f"Discovered {self.num_classes} classes: {self.class_names}")
 
     def __len__(self) -> int:
         return len(self.samples) * self.augmentation_factor
@@ -142,17 +173,15 @@ class MotherboardDataset(Dataset):
         # Count samples per class
         class_counts = {}
         for _, label in self.samples:
-            if label >= 0:  # Exclude normal (-1)
-                class_counts[label] = class_counts.get(label, 0) + 1
+            class_counts[label] = class_counts.get(label, 0) + 1
 
-        # Calculate weights
+        # Calculate weights using dynamically discovered num_classes
         total = sum(class_counts.values())
-        num_classes = len(DEFECT_CLASSES)
-        weights = torch.zeros(num_classes)
+        weights = torch.zeros(self.num_classes)
 
-        for class_idx in range(num_classes):
+        for class_idx in range(self.num_classes):
             count = class_counts.get(class_idx, 1)  # Avoid division by zero
-            weights[class_idx] = total / (num_classes * count)
+            weights[class_idx] = total / (self.num_classes * count)
 
         return weights
 
@@ -231,6 +260,8 @@ class AnomalyDetectionDataset(Dataset):
     """
     Dataset for anomaly detection inference.
     Returns both normal and defect images with their labels.
+
+    Classes are discovered dynamically from subdirectory names.
     """
 
     def __init__(
@@ -247,6 +278,9 @@ class AnomalyDetectionDataset(Dataset):
         """
         self.data_dir = Path(data_dir)
         self.target_size = target_size
+
+        # Discover classes dynamically from folder structure
+        self.defect_classes, self.class_names = discover_defect_classes(self.data_dir)
 
         # Collect all images with anomaly labels
         self.samples: List[Tuple[Path, bool, str]] = []  # (path, is_anomaly, class_name)
@@ -268,15 +302,15 @@ class AnomalyDetectionDataset(Dataset):
         normal_dir = self.data_dir / "normal"
         if normal_dir.exists():
             for img_path in normal_dir.glob("*"):
-                if img_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
+                if img_path.suffix.lower() in IMAGE_EXTENSIONS:
                     self.samples.append((img_path, False, "normal"))
 
-        # Load defect images
-        for class_name in DEFECT_CLASSES.keys():
+        # Load defect images using dynamically discovered classes
+        for class_name in self.defect_classes.keys():
             class_dir = self.data_dir / class_name
             if class_dir.exists():
                 for img_path in class_dir.glob("*"):
-                    if img_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
+                    if img_path.suffix.lower() in IMAGE_EXTENSIONS:
                         self.samples.append((img_path, True, class_name))
 
         print(f"Loaded {len(self.samples)} images for anomaly detection")

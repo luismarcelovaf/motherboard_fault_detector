@@ -212,6 +212,15 @@ def download_model(
     Returns:
         True if download successful, False otherwise
     """
+    # Check for token first
+    token = _get_token()
+    if not token:
+        print("\n[!] No Hugging Face token found.")
+        token = _prompt_for_token()
+        if not token:
+            print("[ERROR] Cannot download without authentication.")
+            return False
+
     repo_id = repo_id or get_repo_id()
     filename = MODEL_FILES.get(model_type, f"{model_type}.pt")
 
@@ -220,11 +229,12 @@ def download_model(
     print(f"  File: {filename}")
 
     try:
-        # Download file
+        # Download file with token
         downloaded_path = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
             repo_type="model",
+            token=token,
         )
 
         # Copy to local path

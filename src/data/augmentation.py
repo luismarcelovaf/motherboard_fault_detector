@@ -311,6 +311,11 @@ class PatchCoreAugmentation:
             ToTensorV2(),
         ])
 
+        # Validation transform (no augmentation, just resize)
+        self.val_transform = A.Compose([
+            A.Resize(height=target_size[0], width=target_size[1]),
+        ])
+
     def augment(self, image: np.ndarray) -> np.ndarray:
         """Apply augmentation to image."""
         return self.transform(image=image)["image"]

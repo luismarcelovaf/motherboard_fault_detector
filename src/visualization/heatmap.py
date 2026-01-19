@@ -62,8 +62,8 @@ class HeatmapProcessor:
         Combine PatchCore and Grad-CAM heatmaps.
 
         Args:
-            patchcore_heatmap: Anomaly heatmap from PatchCore
-            gradcam_heatmap: Localization heatmap from Grad-CAM
+            patchcore_heatmap: Anomaly heatmap from PatchCore (already [0,1])
+            gradcam_heatmap: Localization heatmap from Grad-CAM (already [0,1])
             target_size: Target output size (H, W)
 
         Returns:
@@ -85,18 +85,12 @@ class HeatmapProcessor:
             interpolation=cv2.INTER_LINEAR
         )
 
-        # Normalize
-        pc_norm = self.normalize_heatmap(pc_resized)
-        gc_norm = self.normalize_heatmap(gc_resized)
+        # Use GradCAM as spatial attention mask on PatchCore scores
+        # This focuses PatchCore anomalies where classifier sees defects
+        combined = pc_resized * (0.5 + 0.5 * gc_resized)
 
-        # Weighted combination
-        combined = (
-            self.patchcore_weight * pc_norm +
-            self.classifier_weight * gc_norm
-        )
-
-        # Normalize result
-        combined = self.normalize_heatmap(combined)
+        # Clip to [0, 1]
+        combined = np.clip(combined, 0, 1)
 
         return combined
 

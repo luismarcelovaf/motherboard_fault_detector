@@ -51,6 +51,9 @@ def print_menu():
     print("  [7] Upload Models to Hugging Face")
     print("      - Share your trained models")
     print()
+    print("  [8] Start API Server")
+    print("      - REST API for external applications")
+    print()
     print("  [0] Exit")
     print()
 
@@ -234,6 +237,7 @@ def train_classifier():
         "--data-dir", str(data_dir),
         "--epochs", epochs,
         "--batch-size", batch_size,
+        "--val-split", "0",
         "--output", str(CLASSIFIER_PATH)
     ])
 
@@ -372,7 +376,6 @@ def process_images_inference(images: list, clean_dir: Path, fault_dir: Path):
             is_anomaly = result.get("is_anomaly", False)
             classification = result.get("classification", "unknown")
             confidence = result.get("confidence", 0)
-            anomaly_score = result.get("anomaly_score", 0)
 
             # Load original image
             image = cv2.imread(str(img_path))
@@ -410,20 +413,19 @@ def process_images_inference(images: list, clean_dir: Path, fault_dir: Path):
                 # Save to fault folder
                 output_path = fault_type_dir / img_path.name
                 cv2.imwrite(str(output_path), image)
-                print(f"FAULT ({classification}, {confidence:.0%}) -> {output_path}")
+                print(f"FAULT | {classification} ({confidence:.0%}) -> {output_path}")
 
             else:
                 # Save to clean folder
                 output_path = clean_dir / img_path.name
                 cv2.imwrite(str(output_path), image)
-                print(f"CLEAN (score: {anomaly_score:.2f}) -> {output_path}")
+                print(f"CLEAN | normal ({confidence:.0%}) -> {output_path}")
 
             results_summary.append({
                 "image": img_path.name,
                 "is_anomaly": is_anomaly,
                 "classification": classification,
                 "confidence": confidence,
-                "anomaly_score": anomaly_score,
                 "output": str(output_path),
             })
 
@@ -502,6 +504,21 @@ def download_models():
         print(f"[ERROR] Download failed: {e}")
 
 
+def start_api_server():
+    """Start the REST API server."""
+    print("\n" + "-" * 40)
+    print("STARTING API SERVER")
+    print("-" * 40)
+
+    # Check/download models first
+    if not ensure_models_available():
+        return
+
+    # Run API server
+    import subprocess
+    subprocess.run([sys.executable, "api_server.py"])
+
+
 def upload_models():
     """Upload models to Hugging Face."""
     print("\n" + "-" * 40)
@@ -558,7 +575,7 @@ def main():
     while True:
         print_menu()
 
-        choice = input("Enter choice [0-7]: ").strip()
+        choice = input("Enter choice [0-8]: ").strip()
 
         if choice == "0":
             print("\nGoodbye!")
@@ -577,8 +594,10 @@ def main():
             download_models()
         elif choice == "7":
             upload_models()
+        elif choice == "8":
+            start_api_server()
         else:
-            print("\nInvalid choice. Please enter 0-7.")
+            print("\nInvalid choice. Please enter 0-8.")
 
         input("\nPress Enter to continue...")
 
