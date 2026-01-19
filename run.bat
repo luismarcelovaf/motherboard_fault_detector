@@ -15,10 +15,16 @@ set VENV_DIR=venv
 set PYTHON_EXE=%VENV_DIR%\Scripts\python.exe
 set REQUIREMENTS=requirements.txt
 
-:: Check if venv exists
+:: Check if venv exists and torch is installed
 if exist "%PYTHON_EXE%" (
-    echo [OK] Virtual environment found.
-    goto :check_cuda
+    "%PYTHON_EXE%" -c "import torch" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [OK] Virtual environment found.
+        goto :check_cuda
+    ) else (
+        echo [!] Virtual environment found but PyTorch missing.
+        goto :install_packages
+    )
 )
 
 echo [!] Virtual environment not found. Setting up...
@@ -60,7 +66,10 @@ if errorlevel 1 (
 )
 echo [OK] Virtual environment created.
 
+:install_packages
 :: Upgrade pip
+echo.
+echo Upgrading pip...
 "%PYTHON_EXE%" -m pip install --upgrade pip >nul 2>&1
 
 :: Detect NVIDIA GPU
@@ -96,9 +105,12 @@ echo [OK] Setup complete!
 echo.
 
 :check_cuda
-:: Quick CUDA check
+:: Quick CUDA check (only if torch is installed)
 echo Checking GPU status...
-"%PYTHON_EXE%" -c "import torch; cuda=torch.cuda.is_available(); print(f'[{\"OK\" if cuda else \"WARN\"}] CUDA: {\"Available - \" + torch.cuda.get_device_name(0) if cuda else \"Not available (using CPU)\"}')"
+"%PYTHON_EXE%" -c "import torch; cuda=torch.cuda.is_available(); print(f'[{\"OK\" if cuda else \"INFO\"}] CUDA: {\"Available - \" + torch.cuda.get_device_name(0) if cuda else \"Not available (using CPU)\"}')" 2>nul
+if errorlevel 1 (
+    echo [WARN] PyTorch not installed properly. Try deleting venv folder and run again.
+)
 echo.
 
 :run_main
