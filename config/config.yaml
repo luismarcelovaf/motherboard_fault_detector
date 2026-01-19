@@ -61,7 +61,7 @@ patchcore:
   # Anomaly detection thresholds
   thresholds:
     anomaly_score: 0.5  # PatchCore: score above this = anomaly
-    classifier_confidence: 0.40  # Classifier: confidence above this = fault (overrides PatchCore)
+    classifier_confidence: 0.40  # Classifier: confidence above 40% = fault
     pixel_threshold: 0.5  # For heatmap binarization
 
 # Classifier configuration

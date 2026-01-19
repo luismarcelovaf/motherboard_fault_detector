@@ -192,7 +192,8 @@ class FaultDetector:
         )
 
         # ===== Decision Logic =====
-        # Classifier only - includes "normal" as a class
+        # Classifier includes "normal" as a class
+        # If predicts "normal" -> CLEAN, else -> FAULT
         classifier_prediction = self.class_names[predicted_class]
         is_anomaly = classifier_prediction != "normal"
         defect_type = classifier_prediction

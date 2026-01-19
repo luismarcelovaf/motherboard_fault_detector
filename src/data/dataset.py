@@ -39,7 +39,7 @@ def discover_defect_classes(data_dir: Union[str, Path]) -> Tuple[Dict[str, int],
     if not data_dir.exists():
         return {}, []
 
-    # Sort for consistent ordering, but put 'normal' first
+    # Sort with 'normal' first
     subdirs = sorted(data_dir.iterdir(), key=lambda x: (x.name != "normal", x.name))
 
     for subdir in subdirs:
@@ -65,7 +65,7 @@ CLASS_NAMES: Optional[List[str]] = None
 
 class MotherboardDataset(Dataset):
     """
-    PyTorch Dataset for motherboard images with classification.
+    PyTorch Dataset for motherboard classification.
     Supports on-the-fly augmentation for training.
 
     Classes are discovered dynamically from subdirectory names.
